@@ -55,6 +55,10 @@ is on.
 a single interrupt vector. Their opposite polarities are deliberate, not accidental: it forces the
 shared handler to genuinely work out which pin moved rather than treating both the same way.
 
+### Circuit
+
+![Circuit diagram](images/circuit_diagram.png)
+
 ### Wiring order
 
 Set the rails up first: Uno **5 V** to the red rail, Uno **GND** to the blue rail. Every sensor
@@ -120,6 +124,8 @@ compared against zero and both pins look like they changed.
 
 ## Serial output
 
+![Serial Monitor output](images/serial_monitor.png)
+
 ```
 [TIMER 7s] armed=N alarm=N light=0.83 lx
 [EVENT] VIBRATION (D9) -> tamper detected
@@ -136,7 +142,7 @@ Two things worth noticing in that log:
 
 1. **`[TIMER n s]` never skips a number**, even when several sensor events land inside the same
    second. The periodic task and the event-driven path do not interfere with each other. That is
-   the whole concurrency claim, visible in a single log.
+   the whole concurrency claim, visible in one screenshot.
 2. The `suppressed (own touch)` lines are the tamper-suppression window doing its job. Pressing the
    touch pad physically shakes the desk enough for the vibration sensor to feel it, so events
    arriving within 1.5 s of a touch are logged but not acted on.
@@ -170,7 +176,10 @@ library, so there is nothing to install.
 ```
 .
 ├── TaskM1.ino     the complete program
-└── README.md      this file
+├── README.md      this file
+└── images/
+    ├── circuit_diagram.png
+    └── serial_monitor.png
 ```
 
 ---
