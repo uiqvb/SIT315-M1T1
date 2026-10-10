@@ -1,173 +1,221 @@
-# Interrupt-Driven Intrusion and Tamper Alarm
+# SIT315 M1.T1: Interrupt-Driven Intrusion and Tamper Alarm
 
-An interrupt-driven **Sense–Think–Act** security system built on an Arduino Uno (ATmega328P).
+An interrupt-driven Sense-Think-Act security panel for SIT315 Concurrent and Distributed
+Programming, Module 1. The repository holds two versions of the same system.
 
-Three different interrupt types run at the same time without interfering with each other: an
-external interrupt for intrusion, a shared pin-change interrupt covering two sensors of opposite
-polarity, and a Timer1 interrupt driving a periodic task once per second. No interrupt handler
-does more than raise a flag; every decision, every I²C read and every serial print happens in
-`loop()`.
+| Version | Folder | Boards | Sensors |
+|---|---|---|---|
+| Single board (first submission, 4/4) | `single_board/` | Arduino Uno | IR, touch, vibration, BH1750 light |
+| Two board (upgrade) | `two_board/` | Arduino Uno + Arduino Nano 33 IoT | the four above, plus an LDR read by the Nano |
 
-Built for **SIT315 Concurrent and Distributed Programming**, Module 1, Task M1.T1P, at Quality
-Point level 4/4.
+The single board version is kept exactly as it was first submitted, with its own
+[README](single_board/README.md). Everything below describes the two board version.
 
 ---
 
-## What it does
+## Demo videos
 
-The system behaves like a small home security panel.
+| Video | Link |
+|---|---|
+| Two board system | to be added |
+| Single board system (first submission) | to be added |
 
-It starts **disarmed**. Touching the pad arms it. While armed, either an obstacle in front of the
-IR sensor (an intrusion) or a shock on the vibration sensor (tampering) sets off the alarm.
-Touching the pad while the alarm is sounding silences it *without* disarming, which is how a real
-keypad behaves. Independently of any of that, a 1 Hz timer blinks a heartbeat LED, samples the
-ambient light sensor and prints a status line.
+---
 
-The important idea is that **being armed and being triggered are two separate things**. The exact
-same wave of a hand is logged and ignored when the system is off, and sets off the alarm when it
-is on.
+## What the two board version adds
+
+The Uno still runs the alarm. A second board, a Nano 33 IoT, reads an analogue light sensor (LDR),
+decides on its own whether the room is bright or dark, and reports that decision to the Uno as one
+digital signal. From the Uno's side the Nano looks like a fourth digital sensor.
+
+```
+        NANO 33 IoT (worker)                         UNO (main)
+   SAMD21, 48 MHz, 3.3 V logic               ATmega328P, 16 MHz, 5 V logic
+
+   LDR --> A0                                 D2  <-- IR         (INT0)
+           |                                  D8  <-- touch      (PCINT0)
+   TC3 interrupt, 100 Hz                      D9  <-- vibration  (PCINT1)
+           |                           +----> D10 <-- Nano       (PCINT2)
+   read ADC in loop()                  |      A4/A5 <-> BH1750   (I2C)
+   calibrate, threshold, filter        |
+           |                           |      Timer1 interrupt, 1 Hz
+           v                           |
+          D4 --------------------------+      D11 --> buzzer
+          LOW  = BRIGHT                       D12 --> heartbeat LED
+          HIGH = DARK                         D13 --> alarm LED
+
+          GND ------------------------------- GND
+```
+
+Only two wires join the boards: the signal wire and a common ground. The signal runs one way,
+from the 3.3 V board to the 5 V board. A 3.3 V HIGH is above the ATmega328P input threshold, and
+nothing at 5 V is ever driven into the Nano, whose pins are not 5 V tolerant.
+
+---
+
+## The Nano: analogue in, digital out
+
+Sketch: `two_board/Nano/Nano.ino`
+
+| Step | What happens |
+|---|---|
+| Sample clock | TC3 raises an interrupt 100 times a second. The handler clears the interrupt flag and sets `sampleFlag`. Nothing else. |
+| Read | `loop()` sees the flag and calls `analogRead(A0)` (10 bit, 0 to 1023). |
+| Calibrate | The first 100 samples (one second) are averaged into a baseline for the room it is sitting in. |
+| Threshold | DARK when the reading falls below 70 % of the baseline. Back to BRIGHT only above 85 %. The gap stops the output flickering near one threshold. |
+| Filter | A change needs 5 samples in a row (50 ms) on the far side of the threshold. One noisy sample does nothing. |
+| Report | D4 is driven HIGH for DARK and LOW for BRIGHT. |
+
+TC3 is set up through the SAMD21 registers directly:
+
+```
+48 MHz / 64 (prescaler) = 750 000 counts per second
+750 000 / 100 Hz        = 7500 counts per interrupt
+CC0                     = 7499
+```
+
+`PM->APBCMASK` switches the timer's bus clock on, `GCLK->CLKCTRL` feeds it the 48 MHz clock,
+`TC3->COUNT16.CTRLA` selects 16 bit match-frequency mode with the prescaler, `INTENSET` enables
+the compare interrupt, and the NVIC calls enable the interrupt line in the core.
+
+---
+
+## The Uno: four interrupt sources
+
+Sketch: `two_board/Uno/Uno.ino`
+
+| Interrupt | Trigger | What the handler does |
+|---|---|---|
+| `INT0` via `attachInterrupt` | D2 falling edge | `irFlag = true` |
+| `PCINT0_vect` | any change on D8, D9 or D10 | `portBFlag = true` |
+| `TIMER1_COMPA_vect` | every 1.000 s | `timerFlag = true` |
+
+Every handler is one line. All reading, deciding, printing and I2C happens in `loop()`.
+
+### Three pins on one vector
+
+D8, D9 and D10 are all on Port B, so one pin-change vector serves all three:
+
+```cpp
+PCMSK0 = _BV(PCINT0) | _BV(PCINT1) | _BV(PCINT2);   // D8, D9, D10
+PCICR |= _BV(PCIE0);                                // enable the Port B group
+```
+
+`handlePortB()` works out which pin moved by comparing the port against the last copy it kept:
+
+```cpp
+uint8_t changed = currentPINB ^ previousPINB;   // 1 in every bit that moved
+```
+
+Touch and vibration act only on a LOW to HIGH change of their own bit. The Nano pin acts on both
+edges, because both directions carry information: HIGH means the room went dark, LOW means it
+came back.
+
+### Timer1
+
+CTC mode, prescaler 1024, `OCR1A = 15624`:
+
+```
+16 000 000 / 1024 = 15 625 counts per second, counted as 0 to 15624
+```
+
+Once a second the main loop toggles the heartbeat LED, flips the buzzer phase, reads the BH1750
+and prints a status line.
+
+### Behaviour
 
 | Action | Result |
 |---|---|
 | Touch pad (disarmed) | system arms |
 | Touch pad (armed, no alarm) | system disarms |
-| Touch pad (alarm sounding) | alarm silenced, **stays armed** |
+| Touch pad (alarm sounding) | alarm silenced, stays armed |
 | IR obstacle while armed | alarm on |
 | Vibration while armed | alarm on (tamper) |
-| Vibration within 1.5 s of a touch | logged as `suppressed (own touch)`, no alarm |
+| Vibration within 1.5 s of a touch | logged as suppressed, no alarm |
+| LDR covered while armed | Nano reports DARK, alarm on |
+| LDR uncovered | Nano reports BRIGHT, logged |
 | Any sensor while disarmed | logged, then ignored |
 
 ---
 
-## Hardware
+## Wiring
+
+### Uno
 
 | Component | Pin | Notes |
 |---|---|---|
-| FC-51 IR proximity sensor | **D2** | External interrupt INT0, triggers on **FALLING**. Idles HIGH, drops LOW on detection. |
-| TTP223B capacitive touch pad | **D8** | Pin-change PCINT0. **Active HIGH.** |
-| SW-420 vibration switch | **D9** | Pin-change PCINT1. **Active LOW.** |
-| BH1750 ambient light sensor | **A4 / A5** | I²C at address `0x23`. Runs on **3.3 V**, not 5 V. |
-| Alarm indicator | **D13** | The Uno's onboard LED. Nothing to wire. |
-| Heartbeat LED + 220 Ω | **D12** | Toggles once per second. Visible proof the timer is alive. |
-| Buzzer | **D11** | Pulses in time with the 1 Hz tick while alarming. |
+| FC-51 IR proximity sensor | D2 | INT0, FALLING. Idles HIGH, LOW on detection. |
+| TTP223B touch pad | D8 | PCINT0. HIGH when touched. |
+| SW-420 vibration switch | D9 | PCINT1. HIGH on vibration. |
+| Nano signal | D10 | PCINT2. HIGH = DARK, LOW = BRIGHT. |
+| Buzzer | D11 | Pulses with the 1 Hz tick while the alarm is on. |
+| Heartbeat LED + resistor | D12 | Toggles once a second. |
+| Alarm LED | D13 | The Uno's onboard LED. |
+| BH1750 light sensor | A4 / A5 | I2C, address `0x23`. |
 
-**D8 and D9 are both on PORTB**, which puts them in the same pin-change group and means they share
-a single interrupt vector. Their opposite polarities are deliberate, not accidental: it forces the
-shared handler to genuinely work out which pin moved rather than treating both the same way.
+### Nano 33 IoT
 
-### Circuit
-
-![Circuit diagram](images/circuit_diagram.png)
-
-### Wiring order
-
-Set the rails up first: Uno **5 V** to the red rail, Uno **GND** to the blue rail. Every sensor
-module then takes VCC from the red rail, GND from the blue rail, and its signal pin to the pin in
-the table above. The one exception is the BH1750, which takes VCC from the Uno's dedicated
-**3.3 V** pin.
-
-No pull-up resistors are needed. All four sensor modules have their own onboard conditioning,
-which is why the code uses plain `INPUT` rather than `INPUT_PULLUP`.
-
----
-
-## How the interrupts work
-
-| Interrupt | Trigger | What the handler does |
+| Component | Pin | Notes |
 |---|---|---|
-| `INT0` via `attachInterrupt` | D2 falling edge | `irFlag = true` |
-| `PCINT0_vect` | any change on D8 or D9 | snapshot `PINB`, XOR against previous, set one flag |
-| `TIMER1_COMPA_vect` | every 1.000 s | `tickCount++`, `timerFlag = true` |
-
-### Timer setup
-
-Timer1 in CTC mode with a 1024 prescaler and `OCR1A = 15624`:
-
-```
-16 000 000 / (1024 x 1 Hz) - 1 = 15624
-```
-
-`TIMSK1 |= (1 << OCIE1A)` is what actually enables the interrupt. Configuring the timer and
-switching its interrupt on are two separate steps, and leaving the second one out gives you a
-timer that counts perfectly and never fires.
-
-### Telling D8 and D9 apart
-
-One vector serves the whole group, and it fires on **both** edges. Reading pin levels alone is not
-enough: an interrupt caused by D9 would also see D8 sitting HIGH if a finger were resting on it,
-and invent a touch that never happened.
-
-The handler keeps a snapshot of the port from the previous interrupt and compares:
-
-```cpp
-uint8_t pinb    = PINB;              // read the whole port once
-uint8_t changed = pinb ^ prevPINB;   // 1 in every bit that actually moved
-prevPINB        = pinb;
-```
-
-Each pin then acts only if **its own bit is in `changed`** *and* it has landed in its active state.
-`prevPINB` is seeded from `PINB` before the interrupt is enabled, otherwise the very first edge is
-compared against zero and both pins look like they changed.
-
-### Interrupt-safe practices
-
-- Every handler is one to three lines. Set a flag, get out.
-- No `Serial`, no `delay()`, no I²C inside any handler. The BH1750 read is *triggered* by the timer
-  but *performed* in `loop()`.
-- Everything shared between a handler and `loop()` is `volatile`.
-- The 4-byte tick counter is copied with interrupts briefly disabled, so a half-updated value can
-  never be read.
-- 200 ms debounce on both pin-change inputs. The SW-420 chatters badly on a single tap.
-- `tone()` runs on Timer2 on purpose, so the buzzer can never disturb the Timer1 tick.
-
----
-
-## Serial output
-
-![Serial Monitor output](images/serial_monitor.png)
-
-```
-[TIMER 7s] armed=N alarm=N light=0.83 lx
-[EVENT] VIBRATION (D9) -> tamper detected
-        -> ignored (system disarmed)
-[EVENT] TOUCH (D8) -> system ARMED
-[EVENT] VIBRATION (D9) -> suppressed (own touch)
-[TIMER 8s] armed=Y alarm=N light=0.83 lx
-[EVENT] VIBRATION (D9) -> tamper detected
-        -> ARMED + tamper => ALARM ON
-[EVENT] TOUCH (D8) -> alarm silenced, system stays ARMED
-```
-
-Two things worth noticing in that log:
-
-1. **`[TIMER n s]` never skips a number**, even when several sensor events land inside the same
-   second. The periodic task and the event-driven path do not interfere with each other. That is
-   the whole concurrency claim, visible in one screenshot.
-2. The `suppressed (own touch)` lines are the tamper-suppression window doing its job. Pressing the
-   touch pad physically shakes the desk enough for the vibration sensor to feel it, so events
-   arriving within 1.5 s of a touch are logged but not acted on.
+| LDR voltage divider | A0 | Reading falls as the light falls. |
+| Signal to Uno | D4 | Goes to Uno D10. |
+| Ground | GND | Joined to Uno GND. |
 
 ---
 
 ## Build and upload
 
-1. Open `TaskM1.ino` in the Arduino IDE. If it asks to move the sketch into its own folder, say yes.
-2. **Tools → Board → Arduino Uno**, then pick the COM port.
-3. Upload.
-4. Open **Serial Monitor at 9600 baud**.
+Both sketches use only what ships with the board packages. No extra libraries.
 
-No external libraries are needed. The BH1750 is driven over raw I²C using the built-in `Wire`
-library, so there is nothing to install.
+Uno:
+
+1. Open `two_board/Uno/Uno.ino` in the Arduino IDE.
+2. Tools > Board > Arduino Uno, then pick its COM port.
+3. Upload.
+4. Serial Monitor at 115200 baud.
+
+Nano 33 IoT:
+
+1. Install "Arduino SAMD Boards" from the Boards Manager if it is not there already.
+2. Open `two_board/Nano/Nano.ino`.
+3. Tools > Board > Arduino Nano 33 IoT, then pick its COM port.
+4. Upload.
+5. Serial Monitor at 115200 baud.
+
+Leave the LDR uncovered for the first second after the Nano starts. That second is the
+calibration.
 
 ---
 
-## Test conditions
+## Serial output
 
-| Test | What changes | Why |
-|---|---|---|
-| Wave at the IR sensor disarmed, then armed | Ignored first, alarm second | The decision rule needs two conditions, `systemArmed && intrusion`. The sensing was identical both times; only the state differed. |
-| Silence the alarm, then re-trigger | Alarm clears but the system stays armed; the next event fires it again | State survives the silence. Tapping within 1.5 s is suppressed, tapping later is not. |
-| Change `OCR1A` to `7811` (~2 Hz) or `31249` (~0.5 Hz) | Heartbeat and log rate change; sensor events behave identically | The two paths share no timing dependency, which is what "separation of time-based and event-based logic" means in practice. |
+Uno:
+
+```
+[TIMER 12s] armed=Y alarm=N nano=BRIGHT light=41.67 lx
+[EVENT] NANO D10 -> DARK
+        -> remote LDR event => ALARM ON
+[TIMER 13s] armed=Y alarm=Y nano=DARK light=40.83 lx
+[EVENT] TOUCH D8
+        -> alarm silenced; system stays ARMED
+[EVENT] NANO D10 -> BRIGHT
+```
+
+Nano:
+
+```
+=== CALIBRATION COMPLETE ===
+Baseline = 812
+Dark threshold = 568
+Bright threshold = 690
+
+[NANO] LDR=809 state=BRIGHT
+[NANO EVENT] DARK -> D4 HIGH -> Uno D10
+[NANO] LDR=213 state=DARK
+[NANO EVENT] BRIGHT -> D4 LOW
+```
+
+The numbers in these two blocks show the format. The lux and LDR values depend on the room.
 
 ---
 
@@ -175,27 +223,16 @@ library, so there is nothing to install.
 
 ```
 .
-├── TaskM1.ino     the complete program
-├── README.md      this file
-└── images/
-    ├── circuit_diagram.png
-    └── serial_monitor.png
+├── README.md
+├── single_board/
+│   ├── README.md              write-up of the first submission
+│   ├── TaskM1/TaskM1.ino      Uno, three interrupt sources
+│   └── images/
+└── two_board/
+    ├── Uno/Uno.ino            main board
+    └── Nano/Nano.ino          LDR worker node
 ```
 
 ---
 
-## Notes
-
-Three problems shaped the final design, and all three are worth reading the code for:
-
-- The BH1750 was silently dead because SDA and SCL were swapped. A bus scanner returning *nothing
-  at any address* is what proved it was wiring rather than a wrong address constant.
-- The touch pad and the vibration sensor turned out to be **physically** coupled through the desk,
-  even though they are logically independent. Fixed with the sensitivity pot in hardware and a
-  suppression window in software.
-- The pin-change handler originally read pin *levels* instead of *edges*, which let one sensor's
-  interrupt invent an event on the other. The `prevPINB` XOR above is the fix.
-
----
-
-**SIT315 Concurrent and Distributed Programming** · Deakin University · Module 1, Task M1.T1P (4/4)
+SIT315 Concurrent and Distributed Programming, Deakin University, Module 1, Task M1.T1
