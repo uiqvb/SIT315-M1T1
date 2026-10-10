@@ -17,7 +17,7 @@ The single board version is kept exactly as it was first submitted, with its own
 
 | Video | Link |
 |---|---|
-| Two board system | to be added |
+| Two board system | https://deakin.au.panopto.com/Panopto/Pages/Viewer.aspx?id=5f44e258-a0e5-4595-9141-b4df00968388 |
 | Single board system (first submission) | to be added |
 
 ---
