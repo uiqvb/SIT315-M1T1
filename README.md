@@ -140,6 +140,8 @@ and prints a status line.
 
 ## Wiring
 
+![Two board wiring](two_board/images/circuit_two_board.png)
+
 ### Uno
 
 | Component | Pin | Notes |
@@ -189,33 +191,18 @@ calibration.
 
 ## Serial output
 
-Uno:
+Covering the LDR. Nano on the left, Uno on the right. The Nano drives D4 HIGH and the Uno logs the
+event and raises the alarm at the same timestamp, while the 1 Hz timer count carries on unbroken.
 
-```
-[TIMER 12s] armed=Y alarm=N nano=BRIGHT light=41.67 lx
-[EVENT] NANO D10 -> DARK
-        -> remote LDR event => ALARM ON
-[TIMER 13s] armed=Y alarm=Y nano=DARK light=40.83 lx
-[EVENT] TOUCH D8
-        -> alarm silenced; system stays ARMED
-[EVENT] NANO D10 -> BRIGHT
-```
+![Both boards](two_board/images/02_dark_event_both_boards.png)
 
-Nano:
+A touch on D8 arming the system between two timer lines.
 
-```
-=== CALIBRATION COMPLETE ===
-Baseline = 812
-Dark threshold = 568
-Bright threshold = 690
+![Uno arming](two_board/images/01_uno_touch_arm.png)
 
-[NANO] LDR=809 state=BRIGHT
-[NANO EVENT] DARK -> D4 HIGH -> Uno D10
-[NANO] LDR=213 state=DARK
-[NANO EVENT] BRIGHT -> D4 LOW
-```
+The Nano calibrating after a restart.
 
-The numbers in these two blocks show the format. The lux and LDR values depend on the room.
+![Nano calibration](two_board/images/03_nano_calibration.png)
 
 ---
 
@@ -230,7 +217,8 @@ The numbers in these two blocks show the format. The lux and LDR values depend o
 │   └── images/
 └── two_board/
     ├── Uno/Uno.ino            main board
-    └── Nano/Nano.ino          LDR worker node
+    ├── Nano/Nano.ino          LDR worker node
+    └── images/
 ```
 
 ---
