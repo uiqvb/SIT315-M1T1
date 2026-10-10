@@ -9,7 +9,8 @@ Programming, Module 1. The repository holds two versions of the same system.
 | Two board (upgrade) | `two_board/` | Arduino Uno + Arduino Nano 33 IoT | the four above, plus an LDR read by the Nano |
 
 The single board version is kept exactly as it was first submitted, with its own
-[README](single_board/README.md). Everything below describes the two board version.
+[README](single_board/README.md) and the
+[first submission PDF](single_board/M1.T1P-C-D_first_submission.pdf). Everything below describes the two board version.
 
 ---
 
@@ -18,7 +19,7 @@ The single board version is kept exactly as it was first submitted, with its own
 | Video | Link |
 |---|---|
 | Two board system | https://deakin.au.panopto.com/Panopto/Pages/Viewer.aspx?id=5f44e258-a0e5-4595-9141-b4df00968388 |
-| Single board system (first submission) | to be added |
+| Single board system (first submission) | https://deakin.au.panopto.com/Panopto/Pages/Viewer.aspx?id=71cb82cb-7f2c-42c7-9cca-b49800c22007 |
 
 ---
 
@@ -213,6 +214,7 @@ The Nano calibrating after a restart.
 ├── README.md
 ├── single_board/
 │   ├── README.md              write-up of the first submission
+│   ├── M1.T1P-C-D_first_submission.pdf
 │   ├── TaskM1/TaskM1.ino      Uno, three interrupt sources
 │   └── images/
 └── two_board/
